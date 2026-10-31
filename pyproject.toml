@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rea-toolkit"
+version = "1.1.0"
+description = "rea 配套补丁执行层：文件级二进制补丁 + 多语言文本/代码补丁 的 MCP server"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Li Xinghao" }]
+keywords = ["mcp", "rea", "binary-patch", "reverse-engineering", "patch", "text-patch", "hex"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Debuggers",
+    "Topic :: Utilities",
+]
+dependencies = ["mcp<2"]
+
+[project.urls]
+Homepage = "https://github.com/TTTTTakumi/rea-toolkit"
+Source = "https://github.com/TTTTTakumi/rea-toolkit"
+Documentation = "https://github.com/TTTTTakumi/rea-toolkit#readme"
+Issues = "https://github.com/TTTTTakumi/rea-toolkit/issues"
+
+[project.scripts]
+rea-patcher = "rea_patcher:main"
+rea-text-patcher = "rea_text_patcher:main"
+rea-patch-server = "rea_patch_server:main"
+
+[tool.setuptools]
+py-modules = ["rea_patcher", "rea_text_patcher", "rea_patch_server"]
