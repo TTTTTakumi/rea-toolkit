@@ -6,6 +6,10 @@
 [![Python Versions](https://img.shields.io/pypi/pyversions/rea-toolkit)](https://pypi.org/project/rea-toolkit/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+## 基于 rea 6.8.0
+
+本项目基于 [rea（Reverse Engineer Anything，REA Agents）](https://github.com/morluto/rea) **6.8.0 版本**修改而来，在其之上扩展了补丁执行层（`rea_patcher` / `rea_text_patcher` / `rea_patch_server`）。上游 rea 采用 [MIT License](https://github.com/morluto/rea/blob/main/LICENSE)，本项目同样以 MIT 协议开源。
+
 ## 为什么做这个
 
 [rea-agents](https://github.com/morluto/rea) 是目前最热门的逆向分析 MCP server（约 1.7 万星），提供 170+ 个**只读**分析工具：反编译、伪代码、字符串、引用、抓包、APK/固件拆解……原始文件字节**永不被修改**。
