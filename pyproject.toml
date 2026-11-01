@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rea-toolkit"
-version = "1.1.0"
+version = "1.1.1"
 description = "rea 配套补丁执行层：文件级二进制补丁 + 多语言文本/代码补丁 的 MCP server"
 readme = "README.md"
 requires-python = ">=3.10"

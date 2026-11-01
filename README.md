@@ -24,8 +24,14 @@
 
 两层补丁能力，覆盖从 exe 到配置文件的全部写回场景：
 
-- **二进制补丁** `rea_patcher`：PE 认知（VA/偏移换算）、hex 补丁、掩码通配、JSON 批量清单、dry-run 预览、回读校验、失败自动回滚。
-- **多语言文本/代码补丁** `rea_text_patcher`：replace / regex / line / json / ini 五种操作原语，编码自适应（UTF-8/GBK/UTF-16），保留结构、注释与缩进，同样带备份回滚。
+- **二进制补丁** `rea_patcher`：PE/ELF/Mach-O 三格式认知（VA/偏移自动按段映射换算）、hex 补丁、掩码通配、JSON 批量清单、dry-run 预览、回读校验、失败自动回滚。
+- **多语言文本/代码补丁** `rea_text_patcher`：replace / regex / line / json / ini 五种操作原语，编码自适应（UTF-8/GBK/UTF-16)，保留结构、注释与缩进，同样带备份回滚。
+
+## v1.1.1 新特性
+
+- **ELF / Mach-O 支持**：文件格式自动识别（`pe | elf | macho`），ELF 走 PT_LOAD 段映射、Mach-O 走 LC_SEGMENT 段映射做 VA→文件偏移换算，`rea_patcher info/patch/verify` 全链路适配 ELF32/64、Mach-O 32/64 及大小端。
+- **审批闸门（Approval Gate）**：通过环境变量 `REA_PATCH_APPROVAL_ROOTS` 配置需审批的目录列表（如系统关键路径），命中审批区且未显式授权时直接拒绝写入；调用方显式传 `require_approval=true` 才放行。
+- **审计日志（Audit Log）**：所有 apply / restore / manifest 操作（含批准与拒绝）写入 `audit/rea_patch_audit.jsonl`（默认位于模块目录下，可用环境变量 `REA_PATCH_AUDIT_LOG` 覆盖），记录动作、目标文件、结果与审批状态，供事后核查。
 
 ## 安装
 

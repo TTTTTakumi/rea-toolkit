@@ -4,7 +4,9 @@
 rea_patch_server.py — rea 配套补丁能力的 MCP server（stdio 传输）
 
 定位：rea MCP 只提供只读分析；本 server 补齐"写回"闭环：
-文件级 hex 补丁（备份 / 预期校验 / 掩码 / dry-run / 回滚 / 恢复）。
+文件级 hex 补丁（备份 / 预期校验 / 掩码 / dry-run / 回滚 / 恢复）、
+补丁清单 v2（目标哈希+偏移范围+旧字节+证据ID 四重校验）、
+路径沙箱（受保护系统目录硬拒绝 + allow_roots 白名单）、原子写入。
 
 所有工具前缀 rea_patch_*，与 rea 只读分析工具互补。
 
@@ -29,7 +31,10 @@ mcp = FastMCP(
     "rea-patch",
     instructions=(
         "rea 配套补丁能力：文件级二进制补丁（自动备份、预期字节校验、掩码通配、"
-        "dry-run 预览、回读校验、失败自动回滚、备份恢复）。所有写操作默认带保护。"
+        "dry-run 预览、回读校验、失败自动回滚、备份恢复）、补丁清单 v2 四重校验、"
+        "路径沙箱（受保护系统目录硬拒绝；allow_roots 白名单可限定写入范围）。"
+        "所有写操作默认带保护；受保护系统目录一律拒绝，需审批的高危路径通过"
+        "显式传入 allow_roots 白名单放行。"
     ),
 )
 
@@ -39,6 +44,19 @@ def _norm_num(v) -> int:
     if isinstance(v, str):
         return int(v, 0)
     return int(v)
+
+
+def _write_gate(file_path: str, allow_roots: list[str] | None = None,
+                require_approval: bool = False) -> tuple[str, bool]:
+    """写操作统一安全闸门：受保护系统目录硬拒绝 + 白名单沙箱 + 显式审批。
+    返回 (真实路径, approval_granted)；granted=True 表示本次写入已显式审批授权。"""
+    if rp.is_protected_path(file_path):
+        raise rp.PatchError(
+            f"路径 {file_path} 位于受保护系统目录，拒绝修改（高危审批不通过，"
+            "不可通过 allow_roots 绕过）")
+    real = rp.assert_path_safe(file_path, allow_roots)
+    granted = rp.approval_gate(rp._norm_path(real), require_approval, allow_roots)
+    return real, granted
 
 
 @mcp.tool()
@@ -80,6 +98,8 @@ def rea_patch_apply(
     image_base: int | None = None,
     force: bool = False,
     dry_run: bool = False,
+    allow_roots: list[str] | None = None,
+    require_approval: bool = False,
 ) -> dict:
     """打补丁（写回原文件）。
 
@@ -87,17 +107,62 @@ def rea_patch_apply(
       {"offset": "0x434 或 va0x140001234", "old": "AA??BB", "new": "909090"}
     - old 支持 ? 通配（任意字节）
     - 自动创建 <file>.reapat_bak 备份；旧字节不匹配整批拒绝
+    - 原子写入：临时文件 fsync 后 os.replace，崩溃不会留下半写文件
     - 写回后逐字节回读校验，不匹配自动从备份回滚
     force=true: 已有备份时仍以当前文件为基准（覆盖旧备份）
     dry_run=true: 只校验与预览，不写盘
+    allow_roots: 可选路径白名单根目录数组，目标必须落在其中（沙箱限定）
+    require_approval: 目标位于审批区时，显式传 true 授权写入（审批区由
+      REA_PATCH_APPROVAL_ROOTS 配置；审批后返回与审计带 approval=granted）
     """
+    _, granted = _write_gate(file_path, allow_roots, require_approval)
     data = rp.read_file_bytes(file_path)
     base = _norm_num(image_base) if image_base not in (None, 0) else None
     parsed = []
     for p in patches:
         spec = f"{p['offset']}:{p['old']}:{p['new']}"
         parsed.append(rp.parse_patch_spec(spec, base, data))
-    return rp.apply_patches(file_path, parsed, force=force, dry_run=dry_run)
+    res = rp.apply_patches(file_path, parsed, force=force, dry_run=dry_run,
+                           allow_roots=allow_roots, approval=granted)
+    res["approval"] = "granted" if granted else None
+    return res
+
+
+@mcp.tool()
+def rea_patch_apply_manifest(
+    file_path: str,
+    manifest_path: str,
+    force: bool = False,
+    dry_run: bool = False,
+    allow_roots: list[str] | None = None,
+    require_approval: bool = False,
+) -> dict:
+    """按补丁清单 v2 应用补丁（四重校验，推荐入口）。
+
+    清单 JSON:
+      {"schema": 2,
+       "target": {"file_sha256": "目标文件哈希（必填）", "size": 1234,
+                  "evidence_id": "分析证据ID（可空）"},
+       "image_base": "0x140000000（可空，PE 自动读）",
+       "patches": [{"offset": "0x.. 或 va0x..", "old": "AA??", "new": "9090",
+                    "offset_min": 0（可空，最小合法偏移）,
+                    "evidence_id": "证据ID（可空）"}]}
+
+    四重校验：
+      1. target.file_sha256 == 当前目标文件哈希（防幻觉补丁打错目标）
+      2. offset >= offset_min（防越界幻觉）
+      3. old 原始字节匹配（坐标过期即拒绝）
+      4. evidence_id 审计追溯（写入返回结果）
+
+    受保护系统目录硬拒绝；可通过 allow_roots 白名单限定写入范围。
+    require_approval: 目标位于审批区时，显式传 true 授权写入（审批后返回带 approval=granted）。
+    """
+    _, granted = _write_gate(file_path, allow_roots, require_approval)
+    res = rp.apply_manifest(file_path, manifest_path, force=force,
+                            dry_run=dry_run, allow_roots=allow_roots,
+                            approval=granted)
+    res["approval"] = "granted" if granted else None
+    return res
 
 
 @mcp.tool()
@@ -116,10 +181,15 @@ def rea_patch_verify(file_path: str, offset: str, expected: str) -> dict:
 
 
 @mcp.tool()
-def rea_patch_restore(file_path: str, force: bool = False) -> dict:
+def rea_patch_restore(file_path: str, force: bool = False,
+                      allow_roots: list[str] | None = None,
+                      require_approval: bool = False) -> dict:
     """从 .reapat_bak 备份恢复原文件。force 覆盖当前文件。"""
-    bak = rp.restore_file(file_path, force=force)
-    return {"file": file_path, "restored_from": bak}
+    _, granted = _write_gate(file_path, allow_roots, require_approval)
+    bak = rp.restore_file(file_path, force=force, allow_roots=allow_roots,
+                          approval=granted)
+    return {"file": file_path, "restored_from": bak,
+            "approval": "granted" if granted else None}
 
 
 @mcp.tool()
@@ -155,8 +225,10 @@ def rea_patch_text_apply(
     encoding: str | None = None,
     force: bool = False,
     dry_run: bool = False,
+    allow_roots: list[str] | None = None,
+    require_approval: bool = False,
 ) -> dict:
-    """对文本/代码文件打补丁（多语言通用）。
+    """对文本/代码文件打补丁（多语言通用）。allow_roots: 可选路径白名单（沙箱限定）。
 
     ops 按顺序执行，每一项:
       {"op": "replace", "old": "...", "new": "...", "count": n|None, "occurrence": n|None}
@@ -175,7 +247,25 @@ def rea_patch_text_apply(
     安全网：自动备份 <file>.reapat_txt_bak；全部 ops 先内存模拟，任一失败整批拒绝；
     写盘后回读校验，失败自动从备份回滚；dry_run=true 只预览不写盘。
     """
-    return rtp.apply_text_patch(file_path, ops, encoding, force, dry_run)
+    _, granted = _write_gate(file_path, allow_roots, require_approval)
+    try:
+        result = rtp.apply_text_patch(file_path, ops, encoding, force, dry_run)
+    except Exception as e:  # noqa: BLE001
+        rp._audit("text_apply", ok=False, file=file_path, error=str(e),
+                  op_count=len(ops),
+                  approval="granted" if granted else None)
+        raise
+    rp._audit("text_apply" if not result.get("dry_run") else "text_apply_dry_run",
+              ok=True, file=file_path,
+              backup=result.get("backup", ""),
+              sha256=result.get("sha256", ""),
+              approval="granted" if granted else None,
+              op_count=len(ops),
+              applied_ops=[{"op": o.get("op"), "line": o.get("line"),
+                            "key": o.get("path") or o.get("key"),
+                            "occurrence": o.get("occurrence")} for o in ops])
+    result["approval"] = "granted" if granted else None
+    return result
 
 
 @mcp.tool()
@@ -188,15 +278,23 @@ def rea_patch_text_verify(file_path: str, contains: str | None = None,
 
 
 @mcp.tool()
-def rea_patch_text_restore(file_path: str, force: bool = False) -> dict:
+def rea_patch_text_restore(file_path: str, force: bool = False,
+                           allow_roots: list[str] | None = None,
+                           require_approval: bool = False) -> dict:
     """从 <file>.reapat_txt_bak 文本备份恢复原文件。force 覆盖当前文件。"""
-    return rtp.text_restore(file_path, force)
-
-
-def main():
-    """CLI 入口：启动 stdio MCP server。"""
-    mcp.run()
+    _, granted = _write_gate(file_path, allow_roots, require_approval)
+    try:
+        result = rtp.text_restore(file_path, force)
+    except Exception as e:  # noqa: BLE001
+        rp._audit("text_restore", ok=False, file=file_path, error=str(e),
+                  force=force, approval="granted" if granted else None)
+        raise
+    rp._audit("text_restore", ok=True, file=file_path,
+              backup=result.get("backup", ""), sha256=result.get("sha256", ""),
+              approval="granted" if granted else None)
+    result["approval"] = "granted" if granted else None
+    return result
 
 
 if __name__ == "__main__":
-    main()
+    mcp.run()
